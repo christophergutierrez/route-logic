@@ -87,13 +87,14 @@ def _safe_target(sandbox: Path, rel: str) -> Path:
 
 
 def extract_code_blocks(text: str) -> list[tuple[str, str]]:
-    """Return list of ``(path, contents)`` from path-tagged fenced blocks.
+    """Return list of ``(path, contents)`` from fenced code blocks.
 
-    Rejects blocks without a ``path:`` tag and also returns blocks without
-    tags as ``(path, contents)`` pairs where *path* is the single file
-    ``RE_TARGET_FILE`` when only one block is found (backward compat).
+    Each block's path comes from its own ``path:`` tag; a block without a tag
+    falls back to the single file named by ``RE_TARGET_FILE``. Returns ``[]``
+    when no fenced block is present, so the caller records a model-fault.
 
-    Raises ``ValueError`` if blocks are found but none carry a usable path.
+    Raises ``ValueError`` if a block has no ``path:`` tag and ``RE_TARGET_FILE``
+    is not set.
     """
     matches = list(_FENCE.finditer(text))
     if not matches:
@@ -113,19 +114,6 @@ def extract_code_blocks(text: str) -> list[tuple[str, str]]:
                 "RE_TARGET_FILE is not set"
             )
         results.append((path, block_body))
-
-    # Backward compat: if exactly one block and no explicit path tag, use
-    # RE_TARGET_FILE.
-    if len(results) == 1:
-        path = results[0][0]
-        content = results[0][1]
-        if not _PATH_TAG.search(text[m.start() : m.start() + 80] if m else ""):
-            # Re-check if the original text had no path tag
-            if _PATH_TAG.search(text[matches[0].start(): matches[0].start()+80]):
-                pass  # kept
-            else:
-                # No path tag; use RE_TARGET_FILE
-                results = [(os.environ.get("RE_TARGET_FILE", path), content)]
 
     return results
 

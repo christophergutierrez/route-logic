@@ -61,6 +61,34 @@ def test_extract_no_fence_returns_empty():
     assert extract_code_blocks("Sure! def add(a, b): return a + b") == []
 
 
+def test_extract_untagged_block_falls_back_to_target_file():
+    # A single fenced block with no path: tag resolves to RE_TARGET_FILE.
+    prev = os.environ.get("RE_TARGET_FILE")
+    os.environ["RE_TARGET_FILE"] = "pkg/src.py"
+    try:
+        blocks = extract_code_blocks("```python\nx = 1\n```\n")
+        assert blocks == [("pkg/src.py", "x = 1\n")], blocks
+    finally:
+        if prev is None:
+            os.environ.pop("RE_TARGET_FILE", None)
+        else:
+            os.environ["RE_TARGET_FILE"] = prev
+
+
+def test_extract_untagged_block_without_target_file_raises():
+    # No path: tag and no RE_TARGET_FILE -> ValueError (executor refuses to guess).
+    prev = os.environ.get("RE_TARGET_FILE")
+    os.environ.pop("RE_TARGET_FILE", None)
+    try:
+        extract_code_blocks("```python\nx = 1\n```\n")
+    except ValueError:
+        return
+    finally:
+        if prev is not None:
+            os.environ["RE_TARGET_FILE"] = prev
+    raise AssertionError("untagged block with no RE_TARGET_FILE must raise")
+
+
 def test_mock_write_utf8_under_c_locale():
     # M6: executor must write utf-8 regardless of the ambient locale.
     with tempfile.TemporaryDirectory() as d:
