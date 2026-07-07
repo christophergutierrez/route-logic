@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -21,6 +23,24 @@ RECORD = TASK / "record.json"
 os.environ.setdefault("KILLHOUSE_ROOT", str(Path.home() / "git_home" / "killhouse"))
 sys.path.insert(0, str(REPO / "bin"))
 import run_bracket  # noqa: E402
+
+
+def _init_source_repo(base: Path):
+    source = base / "source"
+    source.mkdir()
+    subprocess.run(["git", "-C", str(source), "init"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(source), "config", "user.email", "test@example.com"], check=True)
+    subprocess.run(["git", "-C", str(source), "config", "user.name", "Test User"], check=True)
+    return source
+
+
+def _commit_all(repo: Path, message: str):
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-m", message], check=True, capture_output=True)
+    return subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
 
 
 def _run(extra_args, extra_env=None):
@@ -103,6 +123,26 @@ def test_loud_config_missing_key():
     raise AssertionError("missing api key must raise SystemExit")
 
 
+def test_loud_config_placeholder_model_id():
+    try:
+        run_bracket._require_live_config(
+            {
+                "base_url": "https://x/v1",
+                "api_key_env": "FIREWORKS_API_KEY",
+                "model_tiers": {
+                    "fast": "accounts/fireworks/models/FILL_ME_fast",
+                    "standard": "real-standard",
+                    "reasoning": "real-reasoning",
+                },
+            },
+            {"FIREWORKS_API_KEY": "secret"},
+        )
+    except SystemExit as exc:
+        assert "placeholder" in str(exc)
+        return
+    raise AssertionError("placeholder model ids must raise SystemExit")
+
+
 def test_error_split_infra_vs_model():
     # R-EXEC-1: exit 2 -> infra-fault, exit 1 -> model-fault, recorded distinctly.
     class _Exc(Exception):
@@ -115,6 +155,52 @@ def test_error_split_infra_vs_model():
     assert infra["verdict"] == "ERROR" and infra["fault"] == "infra"
     assert model["verdict"] == "ERROR" and model["fault"] == "model"
     assert infra["diagnostics"] and model["diagnostics"]
+
+
+def test_worktree_factory_uses_source_repo_and_pinned_head():
+    # inv-hermetic-pinned: worktree sandbox must be of the task source repo,
+    # not route-logic or killhouse.
+    base = Path(tempfile.mkdtemp(prefix="re-source-repo-"))
+    try:
+        source = _init_source_repo(base)
+        (source / "marker.txt").write_text("source\n", encoding="utf-8")
+        head = _commit_all(source, "fixture")
+        record = json.loads(RECORD.read_text(encoding="utf-8"))
+        record["upstream_artifacts"] = [{
+            "kind": "repository_state",
+            "pinned": {"head": head, "repo_root": str(source)},
+        }]
+        repo_root = run_bracket._resolve_source_repo(record, RECORD, None)
+        assert repo_root == source.resolve()
+        with run_bracket.worktree_sandbox_factory(repo_root)(record) as sandbox:
+            run_bracket._assert_pinned_worktree(record, Path(sandbox))
+            assert (Path(sandbox) / "marker.txt").read_text(encoding="utf-8") == "source\n"
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+def test_baseline_pass_refused_as_vacuous():
+    # inv-baseline-fails: a gate that passes before model edits must not be measured.
+    base = Path(tempfile.mkdtemp(prefix="re-vacuous-repo-"))
+    try:
+        source = _init_source_repo(base)
+        (source / "marker.txt").write_text("source\n", encoding="utf-8")
+        head = _commit_all(source, "fixture")
+        record = json.loads(RECORD.read_text(encoding="utf-8"))
+        record["upstream_artifacts"] = [{
+            "kind": "repository_state",
+            "pinned": {"head": head, "repo_root": str(source)},
+        }]
+        record["gate"]["cwd"] = "REPO_ROOT"
+        record["gate"]["command"] = f"{sys.executable} -c 'raise SystemExit(0)'"
+        try:
+            run_bracket.verify_baseline_fails(record, run_bracket.worktree_sandbox_factory(source))
+        except SystemExit as exc:
+            assert "vacuous" in str(exc)
+            return
+        raise AssertionError("passing baseline gate must be refused")
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
 
 
 def _main():

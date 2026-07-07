@@ -8,6 +8,10 @@ __pycache__/
 # Local tier-map override (personal; the tracked source of truth is config.json)
 .killhouse/config.local.json
 
+# Local credentials
+.env
+.env.local
+
 # Bracket run outputs, if we start persisting them
 runs/
 

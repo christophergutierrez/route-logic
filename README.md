@@ -79,12 +79,16 @@ Against Fireworks (or any OpenAI-compatible `base_url`):
 
 ```bash
 # 1. Fill the three model ids in .killhouse/config.json (accounts/fireworks/models/...)
-# 2. Export your key — its NAME is in config.api_key_env; the token never lands in git
+# 2. Export your key or put `export FIREWORKS_API_KEY=...` in a local .env
 export FIREWORKS_API_KEY=fw_...
-bin/run_bracket.py --record tasks/add_two/record.json
+# 3. Use a real reverted-commit task fixture, not the toy mock fixture
+bin/run_bracket.py --record tasks/<real-task>/record.json --emit
 ```
 
-`KILLHOUSE_ROOT` defaults to `~/git_home/killhouse`; override it if killhouse lives elsewhere.
+Live runs default to killhouse's pinned `git_worktree_sandbox`, and refuse a task whose gate
+already passes at baseline. For an external source repo, pass `--repo-root /path/to/repo` or put
+`repo_root` on the record's `repository_state` artifact. `KILLHOUSE_ROOT` defaults to
+`~/git_home/killhouse`; override it if killhouse lives elsewhere.
 
 ## Project structure
 
@@ -102,7 +106,7 @@ tasks/
     record.json       killhouse delegation record: prompt + gate + pinned repo state
 .killhouse/
   config.json       TRACKED tier map: which concrete model sits at fast/standard/reasoning
-docs/               PRD, handoff, and ADRs (design rationale)
+docs/               PRD and ADRs (design rationale)
 CONTEXT.md          glossary — the ubiquitous language for the project
 ```
 
@@ -125,14 +129,13 @@ Full glossary in [`CONTEXT.md`](CONTEXT.md); design rationale in [`docs/adr/`](d
   variable, so it belongs with the experiment. It carries no secrets (`api_key_env` names
   the env var; the token stays in your environment). Personal overrides go in the
   git-ignored `.killhouse/config.local.json`.
-- **The executor is deliberately dumb.** It overwrites a single target file with the
-  model's fenced code block — no diff parsing. Pass 1 isolates "can this tier pass the gate"
-  from "can I apply a patch." Written provider-generic, it's a clean candidate to upstream
-  into killhouse later.
-- **Sandbox is copy-based, not git.** The runner copies the task subtree into a temp dir,
-  so pass 1 runs on a dirty tree with no commit. `record.json` still pins a
-  `repository_state` head so switching to killhouse's hermetic pinned-SHA
-  `git_worktree_sandbox` is a one-line change once fixtures are committed.
+- **The executor is deliberately dumb.** It overwrites whole files from path-tagged fenced
+  code blocks — no diff parsing. Pass 1 isolates "can this tier pass the gate" from
+  "can I apply a patch." Written provider-generic, it's a clean candidate to upstream into
+  killhouse later.
+- **Live tasks use a pinned git worktree.** The runner keeps the copy sandbox for the toy
+  mock, but live runs use killhouse's `git_worktree_sandbox` at the recorded
+  `repository_state.head`, with the source repo supplied by `--repo-root` or the record.
 - **`record.json.outcome` is inert scaffolding.** killhouse's schema requires an `outcome`,
   but gate-replay never trusts it — it computes its own verdict from the real gate. The
   committed value only satisfies validation.
@@ -142,9 +145,9 @@ Full glossary in [`CONTEXT.md`](CONTEXT.md); design rationale in [`docs/adr/`](d
 
 ## Roadmap
 
-1. Swap the mock for real Fireworks ids and confirm a live bracket.
-2. Add more tasks — a task is a dir with `src.py` + `test_src.py` + `record.json`.
-3. Persist brackets to `runs/` and build the `(features → min tier)` table.
+1. Fill real Fireworks model ids and prepare the first real reverted-commit fixture.
+2. Run the live tracer with `--emit` to write `runs/measurements.jsonl`.
+3. Add more real reverted-commit tasks.
 4. Feature extraction + a learned router.
 
 ## License

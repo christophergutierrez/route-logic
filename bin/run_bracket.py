@@ -14,10 +14,10 @@ Output schema (invariant C1): every row in ``results`` is a dict with keys
 tier is computed by ``classify.minimum_viable_tier`` which guarantees
 strict-true pass semantics and a ``NONE`` fallback.
 
-Sandbox: copy-based (a throwaway temp dir with the task subtree copied in), so pass 1 runs
-on a dirty working tree with no commit required. Once fixtures are committed and you want
-hermetic pinned-SHA replay, swap in killhouse's git_worktree_sandbox; the record already
-pins a repository_state head for exactly that.
+Sandbox: mock runs use a copy sandbox for the toy fixture. Live runs default to
+killhouse's hermetic git_worktree_sandbox pinned to the record's repository_state
+head; pass --repo-root for an external source repo or include repo_root on the
+repository_state artifact.
 
 Usage:
   bin/run_bracket.py --record tasks/add_two/record.json --mock   # offline plumbing proof
@@ -64,6 +64,31 @@ _DIAG_TAIL = 500  # chars of captured stderr kept on a non-PASS result (R-EXEC-2
 # gitignored runs/ dir, but is overridable (--out / $RE_MEASUREMENT_LOG) so
 # tests write to temp files and never pollute the default log.
 DEFAULT_MEASUREMENT_LOG = RR / "runs" / "measurements.jsonl"
+
+
+def load_dotenv(path: Path = RR / ".env", env=os.environ):
+    """Load simple KEY=VALUE or export KEY=VALUE lines without overriding env."""
+    path = Path(path)
+    if not path.is_file():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("export "):
+            stripped = stripped[len("export "):].strip()
+        if "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        key = key.strip()
+        if not key or not (key[0].isalpha() or key[0] == "_"):
+            continue
+        if not all(ch.isalnum() or ch == "_" for ch in key):
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        env.setdefault(key, value)
 
 
 def _resolve_measurement_log(out):
@@ -182,7 +207,113 @@ def copy_sandbox_factory(repo_root: Path, rel: str):
     return factory
 
 
-def run_tier(record, tier, routing, executor, factory):
+def _repository_state(record):
+    """Return the record's repository_state artifact or raise a loud error."""
+    for art in record.get("upstream_artifacts", []):
+        if art.get("kind") == "repository_state":
+            return art
+    raise ValueError("record has no repository_state upstream artifact")
+
+
+def _pinned_head(record):
+    """Return repository_state.pinned.head, rejecting empty pins."""
+    head = _repository_state(record).get("pinned", {}).get("head")
+    if not isinstance(head, str) or not head.strip():
+        raise ValueError("record repository_state has no pinned.head")
+    return head.strip()
+
+
+def _resolve_source_repo(record, record_path: Path, explicit_repo_root: Path | None):
+    """Resolve the source repo for live worktree replay.
+
+    Real tasks may name the source checkout on the repository_state artifact as
+    ``repo_root``/``repository_root`` either at the artifact top level or under
+    ``pinned``. ``--repo-root`` overrides the record. If neither is present we
+    fall back to this route-logic repo so the toy fixture and tests still work.
+    Relative paths are resolved from the record directory first.
+    """
+    if explicit_repo_root is not None:
+        raw = explicit_repo_root
+    else:
+        art = _repository_state(record)
+        pinned = art.get("pinned", {})
+        raw = (
+            pinned.get("repo_root")
+            or pinned.get("repository_root")
+            or art.get("repo_root")
+            or art.get("repository_root")
+            or RR
+        )
+    repo_root = Path(raw).expanduser()
+    if not repo_root.is_absolute():
+        candidate = (record_path.resolve().parent / repo_root).resolve()
+        repo_root = candidate if candidate.exists() else (RR / repo_root).resolve()
+    if not repo_root.is_dir():
+        raise SystemExit(f"[fail] source repo root does not exist: {repo_root}")
+    dot_git = repo_root / ".git"
+    if not dot_git.exists():
+        raise SystemExit(f"[fail] source repo root is not a git checkout: {repo_root}")
+    return repo_root.resolve()
+
+
+def worktree_sandbox_factory(repo_root: Path):
+    """A gate_replay-compatible factory grounded at the task's source repo."""
+    @contextmanager
+    def factory(record):
+        with gr.git_worktree_sandbox(record, repo_root=repo_root) as sandbox:
+            yield Path(sandbox)
+
+    return factory
+
+
+def _git_head(path: Path):
+    proc = subprocess.run(
+        ["git", "-C", str(path), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return proc.stdout.strip()
+
+
+def _assert_pinned_worktree(record, sandbox: Path):
+    """inv-hermetic-pinned: the live sandbox must be at the recorded SHA."""
+    expected = _pinned_head(record)
+    actual = _git_head(sandbox)
+    if actual != expected:
+        raise ValueError(f"worktree HEAD {actual} != pinned repository_state head {expected}")
+
+
+def verify_baseline_fails(record, factory):
+    """Refuse vacuous tasks whose gate already passes before model edits.
+
+    ADR-0003 requires reverted-commit tasks: implementation reverted, tests
+    kept, baseline gate failing. This check runs in a fresh pinned sandbox
+    before the bracket so we do not record a meaningless live label.
+    """
+    gate = record["gate"]
+    try:
+        with factory(record) as sandbox:
+            sandbox = Path(sandbox)
+            _assert_pinned_worktree(record, sandbox)
+            gr._materialize_pinned_artifacts(record, sandbox)
+            proc = subprocess.run(
+                gate["command"], shell=True,
+                cwd=str(gr._resolve_cwd(sandbox, gate["cwd"])),
+                capture_output=True, text=True, timeout=GATE_TIMEOUT,
+            )
+    except subprocess.TimeoutExpired as exc:
+        raise SystemExit(f"[fail] baseline gate timed out after {GATE_TIMEOUT}s") from exc
+    except Exception as exc:
+        raise SystemExit(f"[fail] baseline gate could not run: {exc}") from exc
+    if proc.returncode == 0:
+        raise SystemExit(
+            "[fail] baseline gate passed on the pinned worktree; refusing vacuous task"
+        )
+    return proc.returncode
+
+
+def run_tier(record, tier, routing, executor, factory, verify_pinned=False):
     """Run one tier through the sandbox + real gate. Returns a verdict dict."""
     model = gr.resolve_model(routing, tier)
     if model is None:
@@ -192,6 +323,8 @@ def run_tier(record, tier, routing, executor, factory):
     try:
         with factory(record) as sandbox:
             sandbox = Path(sandbox)
+            if verify_pinned:
+                _assert_pinned_worktree(record, sandbox)
             gr._materialize_pinned_artifacts(record, sandbox)
             try:
                 executor(record["resolved_prompt"], model, sandbox)
@@ -237,6 +370,12 @@ def _require_live_config(routing, env):
     key = env.get(key_env)
     if not key:
         raise SystemExit(f"[fail] ${key_env} is not set (needed for live model calls)")
+    for tier in TIERS:
+        model = gr.resolve_model(routing, tier)
+        if model is None:
+            raise SystemExit(f"[fail] model_tiers.{tier} is not set")
+        if "FILL_ME" in model:
+            raise SystemExit(f"[fail] model_tiers.{tier} still contains placeholder {model!r}")
     return base_url, key_env, key
 
 
@@ -286,6 +425,12 @@ def main(argv=None):
     ap.add_argument("--out", "--measurement-log", dest="out", type=Path, default=None,
                     help="raw measurement-log path (JSONL); implies --emit. Overrides "
                          "$RE_MEASUREMENT_LOG and the default runs/measurements.jsonl")
+    ap.add_argument("--sandbox", choices=("auto", "copy", "worktree"), default="auto",
+                    help="sandbox strategy: auto uses copy for --mock and pinned worktree for live")
+    ap.add_argument("--repo-root", type=Path, default=None,
+                    help="source repo checkout for worktree sandbox; overrides repository_state.repo_root")
+    ap.add_argument("--skip-baseline-check", action="store_true",
+                    help="live/worktree only: skip the vacuous-gate baseline failure guard")
     args = ap.parse_args(argv)
 
     record = json.loads(args.record.read_text())
@@ -301,14 +446,15 @@ def main(argv=None):
     rel = os.path.relpath(task_dir, RR)
 
     os.environ["RE_EXECUTOR"] = str(RR / "bin" / "executor.py")
-    os.environ.setdefault("RE_TARGET_FILE", f"{rel}/src.py")
 
     if args.mock:
+        os.environ.setdefault("RE_TARGET_FILE", f"{rel}/src.py")
         os.environ["RE_GOLDEN"] = str(task_dir / "golden.py")
         os.environ["RE_BUGGY"] = str(task_dir / "buggy.py")
         template = ('python3 "$RE_EXECUTOR" --mock --model {model} '
                     "--workdir {workdir} --prompt-file {prompt_file}")
     else:
+        load_dotenv()
         base_url, _key_env, key = _require_live_config(routing, os.environ)
         os.environ["RE_BASE_URL"] = base_url
         os.environ["RE_API_KEY"] = key
@@ -316,9 +462,16 @@ def main(argv=None):
             'python3 "$RE_EXECUTOR" --model {model} --workdir {workdir} --prompt-file {prompt_file}')
 
     executor = gr.command_executor(template)
-    factory = copy_sandbox_factory(RR, rel)
+    use_worktree = args.sandbox == "worktree" or (args.sandbox == "auto" and not args.mock)
+    if use_worktree:
+        repo_root = _resolve_source_repo(record, args.record, args.repo_root)
+        factory = worktree_sandbox_factory(repo_root)
+        if not args.skip_baseline_check:
+            verify_baseline_fails(record, factory)
+    else:
+        factory = copy_sandbox_factory(RR, rel)
 
-    results = [run_tier(record, t, routing, executor, factory) for t in TIERS]
+    results = [run_tier(record, t, routing, executor, factory, verify_pinned=use_worktree) for t in TIERS]
 
     # C1 unification: use classify.minimum_viable_tier instead of ad-hoc logic.
     min_tier = bracket_to_label(results)
