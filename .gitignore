@@ -16,3 +16,7 @@ runs/
 
 # Code-review tribunal artifacts (ephemeral, scaffolding)
 .devtribunal/
+
+# Local crash/session handoff notes
+docs/HANDOFF.md
+HANDOFF.md
