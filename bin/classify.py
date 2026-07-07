@@ -15,16 +15,18 @@ to produce. It is pure: no model calls, no network, no gate execution. It
 only reduces a bracket to a label, so it can be unit-tested and replayed
 freely.
 
-Input shape (flexible). Either a JSON object mapping each tier name to a
-boolean `passed`:
-
-    {"fast": false, "standard": true, "reasoning": true}
-
-or a list of objects each carrying `tier` and `passed` keys:
+Input shape (one canonical shape). A list of objects each carrying `tier`
+and `passed` keys, exactly as `run_bracket.py --schema` emits:
 
     [{"tier": "fast", "passed": false},
      {"tier": "standard", "passed": true},
      {"tier": "reasoning", "passed": true}]
+
+Extra keys per entry (model, verdict, gate_exit, ...) are ignored, so the
+runner's richer per-tier rows are accepted unchanged. The older tier->bool
+object shape is deliberately not accepted: a single input contract keeps the
+runner and the labeler from silently disagreeing (the pass-1 schema-mismatch
+bug).
 
 Output: the minimum viable tier label on stdout (one of the tier names, or
 "NONE"). With --json, emits {"minimum_viable_tier": <label>}.
@@ -53,33 +55,35 @@ def _is_passed(val: Any) -> bool:
     minimum_viable_tier label. Accept only the canonical JSON truthy values;
     everything else (including ``None``, ``0``, ``"false"``, ``"no"``) is
     treated as not passed.
+
+    The numeric check is restricted to ``int`` on purpose. In Python
+    ``1.0 == 1`` is ``True``, so a float ``1.0`` (a common JSON artifact when a
+    float column backs the flag) would otherwise slip through and flip a FAIL
+    tier to PASS. Only a real ``bool`` True or an ``int`` 1 counts.
     """
-    return val is True or val == 1
+    return val is True or (type(val) is int and val == 1)
 
 
 def _normalize(bracket: Any) -> dict[str, bool]:
-    """Coerce the accepted input shapes into {tier: passed_bool}.
+    """Coerce the canonical list shape into {tier: passed_bool}.
 
-    Accepts either a dict mapping tier -> bool, or a list of objects each
-    with `tier` and `passed` keys. Tiers not on the ladder are kept but never
-    selected. Missing ladder tiers are treated as not passed.
+    Accepts a list of objects each with `tier` and `passed` keys. Tiers not on
+    the ladder are kept but never selected. Missing ladder tiers are treated as
+    not passed. A non-list input is a contract violation and raises.
     """
-    result: dict[str, bool] = {tier: False for tier in TIER_LADDER}
-    if isinstance(bracket, dict):
-        for tier, val in bracket.items():
-            result[str(tier)] = _is_passed(val)
-    elif isinstance(bracket, list):
-        for entry in bracket:
-            if not isinstance(entry, dict):
-                continue
-            tier = entry.get("tier")
-            if tier is None:
-                continue
-            result[str(tier)] = _is_passed(entry.get("passed", False))
-    else:
+    if not isinstance(bracket, list):
         raise ValueError(
-            f"bracket must be a JSON object or array, got {type(bracket).__name__}"
+            "bracket must be a JSON array of {tier, passed} objects "
+            f"(the run_bracket --schema shape), got {type(bracket).__name__}"
         )
+    result: dict[str, bool] = {tier: False for tier in TIER_LADDER}
+    for entry in bracket:
+        if not isinstance(entry, dict):
+            continue
+        tier = entry.get("tier")
+        if tier is None:
+            continue
+        result[str(tier)] = _is_passed(entry.get("passed", False))
     return result
 
 

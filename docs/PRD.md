@@ -1,12 +1,12 @@
-# PRD — routerescalation: first live labeled bracket on a real task
+# routerescalation PRD: first live labeled bracket on a real task
 
 Status: draft (pre-spec-audit)
 Date: 2026-07-06
-Scope: Milestone 1 of the data engine. See `docs/adr/0001`–`0006` and `CONTEXT.md`.
+Scope: Milestone 1 of the data engine. See `docs/adr/0001` through `0006` and `CONTEXT.md`.
 
 ## Problem Statement
 
-I want to know, for a real programming task, the **smallest model that can actually do it** —
+I want to know, for a real programming task, the **smallest model that can actually do it**,
 verified by a real pass/fail gate, not human preference or a leaderboard. Standard benchmarks
 are easily gamed and don't tell me the *minimum viable* model per task, which is the signal I
 need to eventually route work to the cheapest model that will succeed. Today I have a pass-1
@@ -24,7 +24,7 @@ distinct from genuine task failures (FAIL) so cheap tiers are labeled fairly.
 
 The mechanism is reused, not rebuilt: routerescalation imports killhouse's gate-replay harness
 for record validation, model resolution, the sandbox, and the real-gate contract, and supplies
-the one piece killhouse omits — the executor.
+the one piece killhouse omits: the executor.
 
 ## User Stories
 
@@ -52,7 +52,7 @@ the one piece killhouse omits — the executor.
 22. As a researcher, I want to keep one or two toy tasks as smoke tests, so that I can validate plumbing changes cheaply without a real repo.
 23. As a maintainer, I want routerescalation to invoke killhouse as an external dependency (import) rather than copy its logic, so that the gate/sandbox/schema stay single-sourced in killhouse.
 24. As a maintainer, I want the harness's behavior covered by tests that inject a fake executor and sandbox, so that I can verify verdicts, label derivation, and the ERROR/FAIL split without live models.
-25. As a researcher, I want a per-run echo of the resolved tier→model map, so that I can see exactly which models produced a dataset before trusting it.
+25. As a researcher, I want a per-run echo of the resolved tier->model map, so that I can see exactly which models produced a dataset before trusting it.
 
 ## Implementation Decisions
 
@@ -73,20 +73,20 @@ the one piece killhouse omits — the executor.
 
   The M1 executor must satisfy three label-integrity requirements (from the pass-1 code review):
 
-  - **R-EXEC-1 — split ERROR semantics (review #1).** A non-zero executor exit is not a single
+  - **R-EXEC-1: split ERROR semantics (review #1).** A non-zero executor exit is not a single
     bucket. The executor must distinguish *model-fault* (the model produced no applicable output:
-    unparseable response, empty fence, missing file tag — a real signal about that tier's
+    unparseable response, empty fence, missing file tag, a real signal about that tier's
     capability, recorded as ERROR / unmeasured) from *infra-fault* (provider/transport/config
     failure: HTTP 401 bad key, 429 rate-limit, 5xx, network error, missing base_url). Infra-faults
     must NOT be recorded as measurements of the tier; the runner retries them or fails the whole
     run loud. Conflating the two lets a single auth failure silently mark every tier ERROR and
     look like "unmeasured" when the run is invalid. `call_model` must inspect HTTP status before
     raising, and the executor must emit a distinct exit/signal for the two classes.
-  - **R-EXEC-2 — attach failure diagnostics (review #2).** On any non-PASS verdict the per-tier
+  - **R-EXEC-2: attach failure diagnostics (review #2).** On any non-PASS verdict the per-tier
     result dict must carry a `diagnostics` field with the tail of the gate's stderr and the
     executor's stderr (captured, not discarded). Without this, a FAIL or ERROR on a 200-task sweep
     is opaque. Capture is cheap to build in now and painful to retrofit later.
-  - **R-EXEC-3 — validate live config loud (review #4).** In live mode the runner must validate
+  - **R-EXEC-3: validate live config loud (review #4).** In live mode the runner must validate
     that `base_url` is non-empty (not just that the API key is set) before invoking any tier. An
     empty/missing base_url currently becomes ERROR-for-all-tiers, which feeds R-EXEC-1's
     conflation. Fail loud at startup instead. (Implemented in `run_bracket.py main()`; survives the
@@ -97,12 +97,21 @@ the one piece killhouse omits — the executor.
   runner therefore records the top tier by running it directly through the same injected sandbox +
   executor + gate path, and replays the two lower tiers via the harness. All three share one
   executor and one sandbox factory so measurements are apples-to-apples.
+- **Unified bracket schema (from the pass-1 code review).** The runner and the labeler must share
+  one bracket outcome schema. In the pass-1 scaffold the runner (`run_bracket.py`) emits a per-tier
+  `verdict` string (PASS/FAIL/ERROR) and computes the minimum viable tier inline, while the labeler
+  (`classify.py`) reads a per-tier `passed` boolean; the two are silently disconnected, so feeding
+  the runner's output straight into the labeler labels a bracket that actually passed as NONE. M1
+  requires a single canonical per-tier outcome field (the PASS/FAIL/ERROR value recorded on the raw
+  measurement record) that the runner writes and the labeler consumes unchanged, with the
+  minimum-viable-tier derivation living in exactly one place (the labeler over the raw log), not
+  duplicated in the runner. This wiring is a testable requirement (see Testing Decisions).
 - **Sandbox.** Real-repo tasks use killhouse's hermetic `git_worktree_sandbox` pinned to the
   record's `repository_state.head` (requires the fixture committed). The copy-based sandbox is
   retained only for toy smoke tests.
 - **Dataset, two layers (ADR-0006).**
   - *Raw measurement log:* append-only JSONL of killhouse delegation records, one per
-    task × tier × attempt, enriched via the schema's open `additionalProperties` with `task_id`,
+    task x tier x attempt, enriched via the schema's open `additionalProperties` with `task_id`,
     concrete `model_id`, latency, token counts, and the PASS/FAIL/ERROR outcome.
   - *Labels view:* derived per-task record `{ task_id, minimum_viable_tier, per_tier_verdicts,
     tier_model_map }`, regenerable from the raw log. `minimum_viable_tier` = lowest tier with
@@ -117,24 +126,33 @@ the one piece killhouse omits — the executor.
 
 ## Testing Decisions
 
-- **What a good test is:** it asserts external behavior — the per-tier verdicts, the derived
-  minimum viable tier, the raw-log rows written, and the ERROR-vs-FAIL classification — never the
+- **What a good test is:** it asserts external behavior (the per-tier verdicts, the derived
+  minimum viable tier, the raw-log rows written, and the ERROR-vs-FAIL classification), never the
   harness's internal steps. No live network in the test suite.
 - **Single highest seam:** the executor (and sandbox factory) injection point, exactly as
   killhouse's own gate-replay is designed and tested. Tests pass a fake executor that writes known
   per-tier outputs and a temp/copy sandbox factory, then assert on the runner's returned bracket
   and the emitted dataset. This is the one seam; no new seams are introduced.
 - **Prior art:** killhouse `tests/` gate-replay tests already inject `executor` and
-  `sandbox_factory` into `gr.replay(...)` and assert verdicts (e.g. "executor writes nothing ⇒ gate
-  fails", "no routing ⇒ executor never called"). routerescalation's tests mirror this pattern.
+  `sandbox_factory` into `gr.replay(...)` and assert verdicts (e.g. "executor writes nothing -> gate
+  fails", "no routing -> executor never called"). routerescalation's tests mirror this pattern.
 - **Modules tested:** the bracket runner (verdict aggregation, top-tier direct run, label
   derivation, ERROR/NONE edge cases) and the executor (whole-file parse/apply; non-zero exit on
-  unparseable/inapplicable output). The dataset writer/labels-deriver is tested via the runner's
-  observable output.
-- **Cases that must be covered:** all-pass ⇒ min tier = fast; split ⇒ min tier = the lowest
-  passing tier; no-pass ⇒ NONE; a tier whose executor fails ⇒ ERROR (not FAIL) and excluded from
-  the label; a vacuous gate (passes at baseline) ⇒ refused. The existing mock already exercises the
+  unparseable/inapplicable output). The dataset writer/labels-deriver is tested through the
+  runner's emitted output (see the runner-to-labeler wiring case below).
+- **Cases that must be covered:** all-pass -> min tier = fast; split -> min tier = the lowest
+  passing tier; no-pass -> NONE; a tier whose executor fails -> ERROR (not FAIL) and excluded from
+  the label; a vacuous gate (passes at baseline) -> refused. The existing mock already exercises the
   split case end-to-end.
+- **Runner-to-labeler wiring must be covered end-to-end:** the label is derived from the runner's
+  actual emitted bracket (or the raw-log rows it writes), never from an independently hand-written
+  bracket, so a schema drift between what the runner emits and what the labeler reads is caught
+  rather than silently producing NONE for a passing bracket. See the unified-bracket-schema
+  decision above.
+- **The ERROR split must be covered (R-EXEC-1):** a model-fault (unparseable, empty, or
+  missing-tag output) is recorded as ERROR at that tier, while an infra-fault (bad key, 429, 5xx,
+  empty base_url) is NOT recorded as a tier measurement (the run retries or fails loud). A test that
+  cannot tell these apart would let one auth failure mislabel every tier ERROR.
 
 ## Out of Scope
 
@@ -143,14 +161,15 @@ the one piece killhouse omits — the executor.
 - Cross-family / best-in-class tier selection (ADR-0005 defers it).
 - Search/replace or unified-diff executor formats (ADR-0004 defers them).
 - Speculative-decoding / draft-model pairing, cost/burn-rate dashboards, provider comparison across
-  proprietary platforms — all later-vision items from the founding notes, not this milestone.
+  proprietary platforms: all later-vision items from the founding notes, not this milestone.
 - Decoupling the experiment tier map from killhouse pipeline routing.
 
 ## Further Notes
 
-- The pass-1 Python scaffold (`bin/run_bracket.py`, `bin/executor.py`, `tasks/add_two/`) already
-  runs green in mock and serves as the executable spec for this milestone; this PRD hardens it from
-  a single-file toy to a multi-file real task with a persisted dataset.
+- The pass-1 Python scaffold (`bin/run_bracket.py`, `bin/executor.py`, `bin/classify.py`,
+  `tasks/add_two/`) already runs green in mock and serves as the executable spec for this milestone;
+  this PRD hardens it from a single-file toy to a multi-file real task with a persisted dataset, and
+  unifies the runner's and labeler's bracket schema (see Implementation Decisions).
 - Upstream opportunity: a provider-generic executor is the piece killhouse's gate-replay ships
   without. If kept generic, it is a clean contribution back to killhouse.
 - Operational prerequisites the researcher supplies before the live run: three real Fireworks model
@@ -160,7 +179,7 @@ the one piece killhouse omits — the executor.
 
 - **ASSUMPTION:** killhouse remains importable at `$KILLHOUSE_ROOT` (default `~/git_home/killhouse`)
   and its `delegation_record.schema.json` continues to allow `additionalProperties` for enrichment.
-- **ASSUMPTION:** capability is monotonic within the chosen family (fast ≤ standard ≤ reasoning);
+- **ASSUMPTION:** capability is monotonic within the chosen family (fast <= standard <= reasoning);
   this is spot-checked, not guaranteed, per ADR-0005.
 - **ASSUMPTION:** the single-seam executor/sandbox injection is sufficient to test all target
   behavior offline; no live-model integration test is required to pass the milestone.
@@ -168,7 +187,7 @@ the one piece killhouse omits — the executor.
   the hermetic `git_worktree_sandbox`? Running the repo's suite needs its toolchain/deps (cargo,
   pip env, etc.). PLAN must decide: rely on the ambient environment, provision per-repo, or restrict
   Milestone 1 to repos whose suite runs with no extra setup.
-- **OPEN QUESTION:** exact Fireworks model ids for the ladder, and the first source repo — supplied
+- **OPEN QUESTION:** exact Fireworks model ids for the ladder, and the first source repo, supplied
   by the researcher; do they meet the "gate runs with available deps" bar above?
 - **OPEN QUESTION:** where does the raw log live and how is it keyed (per-repo? global JSONL?), and
   how are re-runs/attempts de-duplicated when deriving the labels view? PLAN to specify.

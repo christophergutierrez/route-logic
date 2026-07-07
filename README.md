@@ -36,12 +36,14 @@ do the task*, not whether a rater liked the answer.
 ```
 
 - **killhouse** provides the tier-routing and gate-replay machinery. This repo is the
-  *consumer*: the runner invokes killhouse's `killhouse_gate_replay.py` as an external tool
-  via `--repo-root` pointing here, so the experiment (config, fixtures, results) stays
-  self-contained. Nothing here is written into killhouse.
-- The one piece killhouse ships *without* is an **executor** — the component that turns a
+  *consumer*: the runner puts `$KILLHOUSE_ROOT/bin` on `sys.path` and **imports**
+  `killhouse_gate_replay` as a Python module, then calls its functions directly
+  (`resolve_model`, `load_routing`, `command_executor`, the gate path). It runs in-process:
+  no subprocess into killhouse and no external-tool flags; the experiment (config,
+  fixtures, results) stays here and nothing is written into killhouse.
+- The one piece killhouse ships *without* is an **executor**: the component that turns a
   prompt + model id into a candidate change. `bin/executor.py` is that piece: it calls an
-  OpenAI-compatible endpoint and overwrites one target file. Deliberately dumb (no diff
+  OpenAI-compatible endpoint and overwrites the target file(s). Deliberately dumb (no diff
   parsing) so pass 1 isolates "can this tier pass the gate" from "can I apply a patch."
 - killhouse's gate-replay only runs tiers *below* a record's `chosen_tier` (its offline
   "guessed-too-high" calibration test). A full bracket needs all three, so the runner

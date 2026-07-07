@@ -13,3 +13,6 @@ runs/
 
 # Local flocode runtime state (sqlite db, wal/shm, killhouse work items)
 .flocode/
+
+# Code-review tribunal artifacts (ephemeral, scaffolding)
+.devtribunal/

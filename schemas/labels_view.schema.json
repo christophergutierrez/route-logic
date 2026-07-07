@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://routerescalation.dev/schemas/labels_view.schema.json",
+  "title": "routerescalation labels view",
+  "description": "Layer 2 of the two-layer dataset (ADR-0006): a derived, per-task training record. Regenerable from the raw measurement log; not primary data. One JSON object per task. ERROR/SKIPPED-only tiers are 'unmeasured' and excluded from the label; a task with no measured passing tier has minimum_viable_tier 'NONE' (inv-error-unmeasured, inv-labels-contract).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "task_id",
+    "minimum_viable_tier",
+    "per_tier_verdicts",
+    "tier_model_map"
+  ],
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable identifier grouping all measurements of one task."
+    },
+    "minimum_viable_tier": {
+      "type": "string",
+      "enum": ["fast", "standard", "reasoning", "NONE"],
+      "description": "The lowest-capability tier with a measured PASS, or NONE when no tier passes."
+    },
+    "per_tier_verdicts": {
+      "type": "object",
+      "description": "Resolved verdict per tier after BR-2 de-dup: PASS or FAIL for a measured tier, 'unmeasured' for a tier whose only outcomes were ERROR or SKIPPED.",
+      "additionalProperties": {
+        "type": "string",
+        "enum": ["PASS", "FAIL", "unmeasured"]
+      }
+    },
+    "tier_model_map": {
+      "type": "object",
+      "description": "Concrete model id backing each tier, taken from the latest attempt of that tier.",
+      "additionalProperties": {
+        "type": ["string", "null"]
+      }
+    },
+    "flaky": {
+      "type": "object",
+      "description": "BR-2 fail-safe: tiers whose measured attempts disagreed (a PASS and a FAIL both observed). Present only when at least one tier is flaky. ERROR/SKIPPED attempts are unmeasured and never count as disagreement.",
+      "additionalProperties": {
+        "type": "boolean"
+      }
+    }
+  }
+}
