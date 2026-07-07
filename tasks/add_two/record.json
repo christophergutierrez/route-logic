@@ -1,0 +1,24 @@
+{
+  "delegation_id": "toy-add-two-001",
+  "plan_position": "pass1/toy-add-two",
+  "depends_on": [],
+  "resolved_prompt": "Implement the Python function `add(a, b)` so it returns the sum of its two arguments. Respond with a SINGLE fenced code block containing the complete contents of src.py and nothing else.",
+  "chosen_tier": "reasoning",
+  "tier_price": {"currency": "USD", "basis": "unpriced"},
+  "decision_signals": {
+    "source": "manual",
+    "task_tier": "reasoning",
+    "confidence": 0.5,
+    "reasoning": "First-pass toy fixture. chosen_tier is pinned to the ceiling so killhouse's gate-replay would treat both lower tiers as replayable; the runner measures all three."
+  },
+  "gate": {
+    "command": "python3 test_src.py",
+    "cwd": "tasks/add_two",
+    "pass_criteria": "test_src.py exits 0 (all asserts pass)",
+    "baseline_polarity": "fail"
+  },
+  "upstream_artifacts": [
+    {"kind": "repository_state", "pinned": {"head": "HEAD"}}
+  ],
+  "outcome": {"status": "pass", "escalated": false}
+}

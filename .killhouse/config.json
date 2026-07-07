@@ -1,0 +1,12 @@
+{
+  "_comment": "Tracked experimental variable for routerescalation: which concrete model sits at each killhouse tier. No secrets here — api_key_env NAMES the env var holding the token; the token stays in your environment. Fill the three model ids with real Fireworks ids (see https://fireworks.ai/models). killhouse's gate-replay harness reads this via load_routing() when invoked with --repo-root pointing at this repo.",
+  "execution_policy": "cost_optimized",
+  "base_url": "https://api.fireworks.ai/inference/v1",
+  "api_key_env": "FIREWORKS_API_KEY",
+  "model_tiers": {
+    "fast": "accounts/fireworks/models/FILL_ME_fast",
+    "standard": "accounts/fireworks/models/FILL_ME_standard",
+    "reasoning": "accounts/fireworks/models/FILL_ME_reasoning"
+  },
+  "replay_executor": "python3 \"$RE_EXECUTOR\" --model {model} --workdir {workdir} --prompt-file {prompt_file}"
+}

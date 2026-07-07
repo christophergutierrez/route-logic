@@ -1,0 +1,15 @@
+# Embedding model cache
+.fastembed_cache/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Local tier-map override (personal; the tracked source of truth is config.json)
+.killhouse/config.local.json
+
+# Bracket run outputs, if we start persisting them
+runs/
+
+# Local flocode runtime state (sqlite db, wal/shm, killhouse work items)
+.flocode/
