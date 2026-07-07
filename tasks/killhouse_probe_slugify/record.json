@@ -1,0 +1,36 @@
+{
+  "delegation_id": "killhouse-probe-slugify-001",
+  "plan_position": "m4-live-tracer/killhouse-probe-slugify",
+  "depends_on": [],
+  "resolved_prompt": "Create `bin/_probe_slugify.py`. Implement a stdlib-only function `slugify(text: str) -> str` that lowercases, trims, replaces runs of non-alphanumeric characters with single hyphens, strips leading/trailing hyphens, and returns \"untitled\" when nothing remains. Respond with exactly one fenced code block tagged `path:bin/_probe_slugify.py` containing the complete file.",
+  "chosen_tier": "reasoning",
+  "tier_price": {"currency": "USD", "basis": "unpriced"},
+  "decision_signals": {
+    "source": "manual",
+    "task_tier": "reasoning",
+    "confidence": 0.6,
+    "reasoning": "First live tracer fixture: a small stdlib-only implementation task in the killhouse source repo, gated by a pinned acceptance test and suitable for ambient execution."
+  },
+  "gate": {
+    "command": "python3 tests/test_probe_slugify.py",
+    "cwd": "REPO_ROOT",
+    "pass_criteria": "test_probe_slugify.py exits 0",
+    "baseline_polarity": "fail"
+  },
+  "upstream_artifacts": [
+    {
+      "kind": "repository_state",
+      "pinned": {
+        "head": "f8c6af6d190e9eb22113a6bddd6b5492ff55d85c",
+        "repo_root": "../../../killhouse",
+        "dirty_files": []
+      }
+    },
+    {
+      "kind": "pinned_acceptance_test",
+      "path": "tests/test_probe_slugify.py",
+      "pinned_content": "import importlib.util\nfrom pathlib import Path\n\nROOT = Path(__file__).resolve().parents[1]\nTARGET = ROOT / \"bin\" / \"_probe_slugify.py\"\n\nspec = importlib.util.spec_from_file_location(\"_probe_slugify\", TARGET)\nif spec is None or spec.loader is None:\n    raise AssertionError(\"cannot load _probe_slugify\")\nmodule = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(module)\n\n\ndef check(value, expected):\n    assert value == expected, f\"expected {expected!r}, got {value!r}\"\n\n\ncheck(module.slugify(\" Hello, World! \"), \"hello-world\")\ncheck(module.slugify(\"Many---spaces___and symbols\"), \"many-spaces-and-symbols\")\ncheck(module.slugify(\"  \"), \"untitled\")\ncheck(module.slugify(\"Route Logic 2026\"), \"route-logic-2026\")\n"
+    }
+  ],
+  "outcome": {"status": "pass", "escalated": false}
+}

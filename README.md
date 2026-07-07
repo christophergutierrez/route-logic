@@ -81,13 +81,14 @@ Against Fireworks (or any OpenAI-compatible `base_url`):
 # 1. Fill the three model ids in .killhouse/config.json (accounts/fireworks/models/...)
 # 2. Export your key or put `export FIREWORKS_API_KEY=...` in a local .env
 export FIREWORKS_API_KEY=fw_...
-# 3. Use a real reverted-commit task fixture, not the toy mock fixture
-bin/run_bracket.py --record tasks/<real-task>/record.json --emit
+# 3. Use the first real source-repo fixture
+bin/run_bracket.py --record tasks/killhouse_probe_slugify/record.json --emit
 ```
 
 Live runs default to killhouse's pinned `git_worktree_sandbox`, and refuse a task whose gate
-already passes at baseline. For an external source repo, pass `--repo-root /path/to/repo` or put
-`repo_root` on the record's `repository_state` artifact. `KILLHOUSE_ROOT` defaults to
+already passes at baseline. The `killhouse_probe_slugify` fixture points at the sibling
+`killhouse` checkout through its `repository_state.repo_root`; use `--repo-root /path/to/repo`
+to override that if your checkout lives elsewhere. `KILLHOUSE_ROOT` defaults to
 `~/git_home/killhouse`; override it if killhouse lives elsewhere.
 
 ## Project structure
@@ -104,6 +105,8 @@ tasks/
     golden.py         correct impl (mock fixture for standard/reasoning)
     buggy.py          wrong impl (mock fixture for fast)
     record.json       killhouse delegation record: prompt + gate + pinned repo state
+  killhouse_probe_slugify/
+    record.json       first real source-repo fixture; baseline gate fails at pinned killhouse SHA
 .killhouse/
   config.json       TRACKED tier map: which concrete model sits at fast/standard/reasoning
 docs/               PRD and ADRs (design rationale)
