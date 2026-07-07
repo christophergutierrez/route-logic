@@ -276,6 +276,18 @@ def _git_head(path: Path):
     return proc.stdout.strip()
 
 
+def _subprocess_error_detail(exc: subprocess.CalledProcessError):
+    """Include captured subprocess output in infrastructure-failure messages."""
+    parts = [str(exc)]
+    stderr = (exc.stderr or "").strip()
+    stdout = (exc.stdout or "").strip()
+    if stderr:
+        parts.append(f"stderr: {stderr}")
+    if stdout:
+        parts.append(f"stdout: {stdout}")
+    return "; ".join(parts)
+
+
 def _assert_pinned_worktree(record, sandbox: Path):
     """inv-hermetic-pinned: the live sandbox must be at the recorded SHA."""
     expected = _pinned_head(record)
@@ -304,6 +316,8 @@ def verify_baseline_fails(record, factory):
             )
     except subprocess.TimeoutExpired as exc:
         raise SystemExit(f"[fail] baseline gate timed out after {GATE_TIMEOUT}s") from exc
+    except subprocess.CalledProcessError as exc:
+        raise SystemExit(f"[fail] baseline gate could not run: {_subprocess_error_detail(exc)}") from exc
     except Exception as exc:
         raise SystemExit(f"[fail] baseline gate could not run: {exc}") from exc
     if proc.returncode == 0:
@@ -341,6 +355,10 @@ def run_tier(record, tier, routing, executor, factory, verify_pinned=False):
                 return {"tier": tier, "model": model, "verdict": "ERROR", "gate_exit": None,
                         "fault": "gate", "reason": f"gate timeout ({GATE_TIMEOUT}s)",
                         "diagnostics": f"gate exceeded {GATE_TIMEOUT}s and was killed"}
+    except subprocess.CalledProcessError as exc:
+        detail = _subprocess_error_detail(exc)
+        return {"tier": tier, "model": model, "verdict": "ERROR", "gate_exit": None,
+                "fault": "infra", "reason": detail, "diagnostics": detail[-_DIAG_TAIL:]}
     except Exception as exc:  # sandbox/gate infra failure, not a gate result
         return {"tier": tier, "model": model, "verdict": "ERROR", "gate_exit": None,
                 "fault": "infra", "reason": str(exc), "diagnostics": str(exc)[-_DIAG_TAIL:]}
@@ -399,6 +417,11 @@ def bracket_to_label(results):
     Returns a str label (one of the tier names or "NONE").
     """
     return mvt(_to_bracket(results))
+
+
+def infra_fault_tiers(results):
+    """Return tiers whose result is an infrastructure failure, not a measurement."""
+    return [r["tier"] for r in results if r.get("fault") == "infra"]
 
 
 def print_bracket(record, results, min_tier):
@@ -475,6 +498,22 @@ def main(argv=None):
 
     # C1 unification: use classify.minimum_viable_tier instead of ad-hoc logic.
     min_tier = bracket_to_label(results)
+
+    # A live infra fault means auth/rate-limit/provider/sandbox failed; do not
+    # append those rows as if they were completed measurements.
+    infra_tiers = infra_fault_tiers(results) if not args.mock else []
+    if infra_tiers:
+        if args.schema:
+            bracket = _to_bracket(results)
+            for row, r in zip(bracket, results):
+                if r.get("diagnostics"):
+                    row["diagnostics"] = r["diagnostics"]
+            json.dump({"bracket": bracket, "minimum_viable_tier": min_tier}, sys.stdout)
+            sys.stdout.write("\n")
+        else:
+            print_bracket(record, results, min_tier)
+        joined = ", ".join(infra_tiers)
+        raise SystemExit(f"[fail] live infra-fault on tier(s): {joined}; not emitting measurements")
 
     # BR-1: persist the raw measurement layer only when explicitly asked, so the
     # pure --mock / --schema behaviors are unchanged by default.

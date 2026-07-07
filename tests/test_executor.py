@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import urllib.error
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -87,6 +88,28 @@ def test_extract_untagged_block_without_target_file_raises():
         if prev is not None:
             os.environ["RE_TARGET_FILE"] = prev
     raise AssertionError("untagged block with no RE_TARGET_FILE must raise")
+
+
+def test_http_error_detail_includes_provider_body():
+    exc = urllib.error.HTTPError(
+        "https://example.invalid",
+        403,
+        "Forbidden",
+        {},
+        tempfile.SpooledTemporaryFile(),
+    )
+    exc.fp.write(b'{"error":"model not enabled"}')
+    exc.fp.seek(0)
+    detail = executor._http_error_detail(exc)
+    assert "HTTP 403" in detail
+    assert "model not enabled" in detail
+
+
+def test_request_headers_include_provider_safe_user_agent():
+    headers = executor._request_headers("secret")
+    assert headers["Authorization"] == "Bearer secret"
+    assert headers["Accept"] == "application/json"
+    assert headers["User-Agent"].startswith("curl/")
 
 
 def test_mock_write_utf8_under_c_locale():

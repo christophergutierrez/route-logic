@@ -157,6 +157,15 @@ def test_error_split_infra_vs_model():
     assert infra["diagnostics"] and model["diagnostics"]
 
 
+def test_infra_fault_tiers_detected_before_emit():
+    results = [
+        {"tier": "fast", "verdict": "ERROR", "fault": "infra"},
+        {"tier": "standard", "verdict": "ERROR", "fault": "model"},
+        {"tier": "reasoning", "verdict": "PASS"},
+    ]
+    assert run_bracket.infra_fault_tiers(results) == ["fast"]
+
+
 def test_worktree_factory_uses_source_repo_and_pinned_head():
     # inv-hermetic-pinned: worktree sandbox must be of the task source repo,
     # not route-logic or killhouse.

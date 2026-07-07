@@ -67,6 +67,7 @@ _FENCE = re.compile(
 _PATH_TAG = re.compile(r"""path:\s*([^\s"`]+)""")
 
 _UTF8 = {"encoding": "utf-8"}
+_HTTP_BODY_TAIL = 1000
 
 
 def _safe_target(sandbox: Path, rel: str) -> Path:
@@ -118,6 +119,49 @@ def extract_code_blocks(text: str) -> list[tuple[str, str]]:
     return results
 
 
+def _http_error_body(exc: urllib.error.HTTPError) -> str:
+    """Best-effort response-body extraction for provider diagnostics."""
+    try:
+        body = exc.read()
+    except Exception:  # noqa: BLE001 - diagnostic path only
+        return ""
+    if not body:
+        return ""
+    try:
+        text = body.decode("utf-8", errors="replace")
+    except AttributeError:
+        text = str(body)
+    return text.strip()[-_HTTP_BODY_TAIL:]
+
+
+def _http_error_detail(exc: urllib.error.HTTPError) -> str:
+    """Return status plus provider body without exposing request headers."""
+    status = exc.code
+    reason = getattr(exc, "reason", "") or ""
+    detail = f"HTTP {status}"
+    if reason:
+        detail += f" {reason}"
+    body = _http_error_body(exc)
+    if body:
+        detail += f"; body: {body}"
+    return detail
+
+
+def _request_headers(api_key: str) -> dict[str, str]:
+    """Headers for OpenAI-compatible providers.
+
+    Fireworks currently rejects Python urllib's default user-agent with a 403
+    body of "error code: 1010". A curl-like user-agent keeps the stdlib client
+    on the same path as a working curl request without changing auth semantics.
+    """
+    return {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": "curl/8.0.0",
+    }
+
+
 def call_model(model: str, prompt: str) -> str:
     """Call an OpenAI-compatible chat/completions endpoint.
 
@@ -142,25 +186,23 @@ def call_model(model: str, prompt: str) -> str:
     req = urllib.request.Request(
         url,
         data=payload,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
+        headers=_request_headers(api_key),
     )
     try:
         with urllib.request.urlopen(req, timeout=180) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         status = exc.code
+        detail = _http_error_detail(exc)
         if status in (401, 403, 429):
             raise ValueError(
-                f"infra-fault: HTTP {status} (auth rate-limit); tier unmeasured"
+                f"infra-fault: {detail} (auth/access/rate-limit); tier unmeasured"
             ) from exc
         if status >= 500:
             raise ValueError(
-                f"infra-fault: HTTP {status} (server error); tier unmeasured"
+                f"infra-fault: {detail} (server error); tier unmeasured"
             ) from exc
-        raise ValueError(f"model-fault: HTTP {status}") from exc
+        raise ValueError(f"model-fault: {detail}") from exc
     except (urllib.error.URLError, OSError) as exc:
         raise ValueError("infra-fault: network error; tier unmeasured") from exc
 
