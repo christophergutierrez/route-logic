@@ -78,18 +78,45 @@ Expected output (model ids come from `.killhouse/config.json`; the `FILL_ME_*` p
 Against Fireworks (or any OpenAI-compatible `base_url`):
 
 ```bash
-# 1. Fill the three model ids in .killhouse/config.json (accounts/fireworks/models/...)
+# 1. Put local model ids in .killhouse/config.local.json
 # 2. Export your key or put `export FIREWORKS_API_KEY=...` in a local .env
 export FIREWORKS_API_KEY=fw_...
 # 3. Use the first real source-repo fixture
 bin/run_bracket.py --record tasks/killhouse_probe_slugify/record.json --emit
 ```
 
+Example local config (gitignored):
+
+```json
+{
+  "execution_policy": "cost_optimized",
+  "base_url": "https://api.fireworks.ai/inference/v1",
+  "api_key_env": "FIREWORKS_API_KEY",
+  "model_tiers": {
+    "fast": "accounts/fireworks/models/gpt-oss-120b",
+    "standard": "accounts/fireworks/models/glm-5p1",
+    "reasoning": "accounts/fireworks/models/kimi-k2p6"
+  },
+  "replay_executor": "python3 \"$RE_EXECUTOR\" --model {model} --workdir {workdir} --prompt-file {prompt_file}"
+}
+```
+
 Live runs default to killhouse's pinned `git_worktree_sandbox`, and refuse a task whose gate
-already passes at baseline. The `killhouse_probe_slugify` fixture points at the sibling
-`killhouse` checkout through its `repository_state.repo_root`; use `--repo-root /path/to/repo`
-to override that if your checkout lives elsewhere. `KILLHOUSE_ROOT` defaults to
-`~/git_home/killhouse`; override it if killhouse lives elsewhere.
+already passes at baseline. The `killhouse_probe_*` fixtures point at the sibling `killhouse`
+checkout through `repository_state.repo_root`; use `--repo-root /path/to/repo` to override that
+if your checkout lives elsewhere. `KILLHOUSE_ROOT` defaults to `~/git_home/killhouse`; override
+it if killhouse lives elsewhere.
+
+Derive the labels view from a run:
+
+```bash
+bin/derive_labels.py runs/measurements.jsonl
+bin/derive_labels.py runs/measurements.jsonl --task-id killhouse-probe-slugify-001
+```
+
+`runs/`, `.killhouse/config.local.json`, `.env*`, and scratch files are ignored. The code repo
+keeps fixtures, schemas, and harness logic; local credentials, provider choices, and emitted
+datasets stay out of git.
 
 ## Project structure
 
@@ -106,7 +133,9 @@ tasks/
     buggy.py          wrong impl (mock fixture for fast)
     record.json       killhouse delegation record: prompt + gate + pinned repo state
   killhouse_probe_slugify/
-    record.json       first real source-repo fixture; baseline gate fails at pinned killhouse SHA
+    record.json       real source-repo fixture; baseline gate fails at pinned killhouse SHA
+  killhouse_probe_kv_config/
+    record.json       second real source-repo fixture; stdlib parser task with ambient gate
 .killhouse/
   config.json       TRACKED tier map: which concrete model sits at fast/standard/reasoning
 docs/               PRD and ADRs (design rationale)
@@ -148,9 +177,9 @@ Full glossary in [`CONTEXT.md`](CONTEXT.md); design rationale in [`docs/adr/`](d
 
 ## Roadmap
 
-1. Fill real Fireworks model ids and prepare the first real reverted-commit fixture.
-2. Run the live tracer with `--emit` to write `runs/measurements.jsonl`.
-3. Add more real reverted-commit tasks.
+1. Add more real reverted-commit tasks with baseline-failing gates and ambient dependencies.
+2. Move emitted datasets from `runs/` into the downstream router-training system.
+3. Replace the current heterogeneous smoke ladder with a cleaner dedicated model ladder when available.
 4. Feature extraction + a learned router.
 
 ## License

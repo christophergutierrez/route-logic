@@ -11,9 +11,23 @@ __pycache__/
 # Local credentials
 .env
 .env.local
+.env.*
+!.env.example
 
 # Bracket run outputs, if we start persisting them
 runs/
+
+# Local scratch, generated logs, and editor byproducts
+tmp/
+scratch/
+*.log
+*.tmp
+*.bak
+*.swp
+*.db
+*.db-shm
+*.db-wal
+x
 
 # Local flocode runtime state (sqlite db, wal/shm, killhouse work items)
 .flocode/

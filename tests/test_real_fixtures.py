@@ -14,7 +14,7 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-RECORD = REPO / "tasks" / "killhouse_probe_slugify" / "record.json"
+REAL_RECORDS = sorted((REPO / "tasks").glob("killhouse_probe_*/record.json"))
 
 os.environ.setdefault("KILLHOUSE_ROOT", str(Path.home() / "git_home" / "killhouse"))
 sys.path.insert(0, str(REPO / "bin"))
@@ -25,31 +25,34 @@ sys.path.insert(0, str(KH_ROOT / "bin"))
 import killhouse_delegation_log as kdl  # noqa: E402
 
 
-def _load_record():
-    return json.loads(RECORD.read_text(encoding="utf-8"))
+def _load_record(path: Path):
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
-def test_killhouse_probe_record_schema_valid():
-    record = _load_record()
-    errors = kdl.validate_record(record)
-    assert not errors, errors
-    assert "path:bin/_probe_slugify.py" in record["resolved_prompt"]
+def test_real_fixture_records_schema_valid():
+    assert REAL_RECORDS, "expected at least one real fixture record"
+    for record_path in REAL_RECORDS:
+        record = _load_record(record_path)
+        errors = kdl.validate_record(record)
+        assert not errors, f"{record_path}: {errors}"
+        assert "path:bin/" in record["resolved_prompt"], record_path
 
 
-def test_killhouse_probe_source_repo_and_pin_resolve():
-    record = _load_record()
-    source = run_bracket._resolve_source_repo(record, RECORD, None)
-    assert source.name == "killhouse", source
-    head = run_bracket._pinned_head(record)
-    subprocess.run(
-        ["git", "-C", str(source), "cat-file", "-e", f"{head}^{{commit}}"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+def test_real_fixture_source_repos_and_pins_resolve():
+    for record_path in REAL_RECORDS:
+        record = _load_record(record_path)
+        source = run_bracket._resolve_source_repo(record, record_path, None)
+        assert source.name == "killhouse", source
+        head = run_bracket._pinned_head(record)
+        subprocess.run(
+            ["git", "-C", str(source), "cat-file", "-e", f"{head}^{{commit}}"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
 
 
-def test_killhouse_probe_baseline_fails_without_worktree_write():
+def test_real_fixture_baselines_fail_without_worktree_write():
     """Prove baseline polarity without mutating the source repo's git metadata.
 
     Production live runs use git_worktree_sandbox. This test uses git archive
@@ -57,33 +60,34 @@ def test_killhouse_probe_baseline_fails_without_worktree_write():
     The invariant is the same: at the pinned source tree, before model edits,
     the gate exits non-zero after pinned artifacts are materialized.
     """
-    record = _load_record()
-    source = run_bracket._resolve_source_repo(record, RECORD, None)
-    head = run_bracket._pinned_head(record)
-    tmp = Path(tempfile.mkdtemp(prefix="re-real-fixture-"))
-    try:
-        archive = subprocess.Popen(
-            ["git", "-C", str(source), "archive", "--format=tar", head],
-            stdout=subprocess.PIPE,
-        )
-        subprocess.run(["tar", "-xf", "-", "-C", str(tmp)], stdin=archive.stdout, check=True)
-        if archive.stdout is not None:
-            archive.stdout.close()
-        if archive.wait() != 0:
-            raise AssertionError("git archive failed")
-        run_bracket.gr._materialize_pinned_artifacts(record, tmp)
-        proc = subprocess.run(
-            record["gate"]["command"],
-            shell=True,
-            cwd=str(run_bracket.gr._resolve_cwd(tmp, record["gate"]["cwd"])),
-            capture_output=True,
-            text=True,
-            timeout=run_bracket.GATE_TIMEOUT,
-        )
-        assert proc.returncode != 0, "baseline gate must fail before model edits"
-        assert "_probe_slugify.py" in (proc.stderr + proc.stdout)
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+    for record_path in REAL_RECORDS:
+        record = _load_record(record_path)
+        source = run_bracket._resolve_source_repo(record, record_path, None)
+        head = run_bracket._pinned_head(record)
+        tmp = Path(tempfile.mkdtemp(prefix="re-real-fixture-"))
+        try:
+            archive = subprocess.Popen(
+                ["git", "-C", str(source), "archive", "--format=tar", head],
+                stdout=subprocess.PIPE,
+            )
+            subprocess.run(["tar", "-xf", "-", "-C", str(tmp)], stdin=archive.stdout, check=True)
+            if archive.stdout is not None:
+                archive.stdout.close()
+            if archive.wait() != 0:
+                raise AssertionError("git archive failed")
+            run_bracket.gr._materialize_pinned_artifacts(record, tmp)
+            proc = subprocess.run(
+                record["gate"]["command"],
+                shell=True,
+                cwd=str(run_bracket.gr._resolve_cwd(tmp, record["gate"]["cwd"])),
+                capture_output=True,
+                text=True,
+                timeout=run_bracket.GATE_TIMEOUT,
+            )
+            assert proc.returncode != 0, f"{record_path}: baseline gate must fail before model edits"
+            assert "_probe_" in (proc.stderr + proc.stdout), record_path
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 def _main():

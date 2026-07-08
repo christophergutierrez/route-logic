@@ -1,0 +1,36 @@
+{
+  "delegation_id": "killhouse-probe-kv-config-001",
+  "plan_position": "m4-live-tracer/killhouse-probe-kv-config",
+  "depends_on": [],
+  "resolved_prompt": "Create `bin/_probe_kv_config.py`. Implement a stdlib-only function `parse_kv_config(text: str) -> dict[str, str]`. It should parse newline-delimited `key=value` settings, trim whitespace around keys and values, ignore blank lines and lines whose first non-space character is `#`, reject lines without `=`, reject empty keys, and let later duplicate keys overwrite earlier values. Respond with exactly one fenced code block tagged `path:bin/_probe_kv_config.py` containing the complete file.",
+  "chosen_tier": "reasoning",
+  "tier_price": {"currency": "USD", "basis": "unpriced"},
+  "decision_signals": {
+    "source": "manual",
+    "task_tier": "reasoning",
+    "confidence": 0.6,
+    "reasoning": "Second live tracer fixture: a small stdlib-only parser task in the killhouse source repo, gated by a pinned acceptance test and suitable for ambient execution."
+  },
+  "gate": {
+    "command": "python3 tests/test_probe_kv_config.py",
+    "cwd": "REPO_ROOT",
+    "pass_criteria": "test_probe_kv_config.py exits 0",
+    "baseline_polarity": "fail"
+  },
+  "upstream_artifacts": [
+    {
+      "kind": "repository_state",
+      "pinned": {
+        "head": "f8c6af6d190e9eb22113a6bddd6b5492ff55d85c",
+        "repo_root": "../../../killhouse",
+        "dirty_files": []
+      }
+    },
+    {
+      "kind": "pinned_acceptance_test",
+      "path": "tests/test_probe_kv_config.py",
+      "pinned_content": "import importlib.util\nfrom pathlib import Path\n\nROOT = Path(__file__).resolve().parents[1]\nTARGET = ROOT / \"bin\" / \"_probe_kv_config.py\"\n\nspec = importlib.util.spec_from_file_location(\"_probe_kv_config\", TARGET)\nif spec is None or spec.loader is None:\n    raise AssertionError(\"cannot load _probe_kv_config\")\nmodule = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(module)\n\nsample = \"\"\"\n# ignored\n name = route-logic\nmode= live\n\nname = override\nempty =\n\"\"\"\nparsed = module.parse_kv_config(sample)\nassert parsed == {\"name\": \"override\", \"mode\": \"live\", \"empty\": \"\"}, parsed\n\ntry:\n    module.parse_kv_config(\"missing delimiter\")\nexcept ValueError:\n    pass\nelse:\n    raise AssertionError(\"line without '=' must raise ValueError\")\n\ntry:\n    module.parse_kv_config(\" = value\")\nexcept ValueError:\n    pass\nelse:\n    raise AssertionError(\"empty key must raise ValueError\")\n"
+    }
+  ],
+  "outcome": {"status": "pass", "escalated": false}
+}
